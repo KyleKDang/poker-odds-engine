@@ -10,11 +10,71 @@ A high-performance poker odds calculator built with **Go** and **Gin framework**
 
 ## Performance
 
+Benchmarked on MacBook Air M-series (8 cores), all times averaged over 5 trials:
+
+### Summary
 - **10-50x faster** than Python implementations
 - **Hand Evaluation**: <1ms per hand
-- **Odds Calculation**: 50-100ms for 10,000 simulations
-- **Throughput**: 100+ concurrent requests/second
-- **True Parallelism**: No GIL limitations
+- **Default (10k sims)**: ~172ms average
+- **High accuracy (100k sims)**: ~1.63s average
+- **Goroutine speedup**: 3.1x with 8 workers vs sequential
+- **Scales linearly** with number of opponents
+
+### Performance by Simulation Count
+*1 opponent, 4 workers*
+
+| Simulations | Avg Time | Min | Max | Std Dev |
+|-------------|----------|-----|-----|---------|
+| 1,000 | 25ms | 25ms | 25ms | 0ms |
+| 10,000 | 172ms | 171ms | 174ms | 1ms |
+| 50,000 | 817ms | 811ms | 830ms | 7ms |
+| 100,000 | 1.63s | 1.62s | 1.66s | 0.02s |
+
+**Linear scaling**: ~17μs per simulation
+
+### Performance by Number of Opponents
+*10,000 simulations, 4 workers*
+
+| Opponents | Avg Time | Win Rate | Notes |
+|-----------|----------|----------|-------|
+| 1 | 171ms | 85% | Fast heads-up |
+| 3 | 333ms | 64% | Small table |
+| 5 | 481ms | 49% | Medium table |
+| 9 | 806ms | 31% | Full table |
+
+**Linear scaling**: ~80ms per additional opponent
+
+### Performance by Worker Count (Parallelism)
+*100,000 simulations, 1 opponent*
+
+| Workers | Avg Time | Speedup | Efficiency |
+|---------|----------|---------|------------|
+| 1 | 4.30s | 1.0x | 100% |
+| 2 | 2.44s | 1.76x | 88% |
+| 4 | 1.63s | 2.64x | 66% |
+| 8 | 1.38s | 3.12x | 39% |
+
+**Optimal**: 4 workers for most scenarios (best efficiency)
+
+### Performance by Board Stage
+*1 opponent, 10,000 simulations, 4 workers*
+
+| Stage | Cards | Avg Time | Notes |
+|-------|-------|----------|-------|
+| Pre-flop | 0 | 189ms | Most uncertainty |
+| Flop | 3 | 180ms | Minimal difference |
+| Turn | 4 | 182ms | Consistent |
+| River | 5 | 181ms | Fast (no randomness) |
+
+**Insight**: Board cards have negligible performance impact
+
+### Stress Tests
+*9 opponents, 8 workers*
+
+| Simulations | Avg Time | Use Case |
+|-------------|----------|----------|
+| 50,000 | 3.47s | High accuracy, full table |
+| 100,000 | 6.79s | Maximum accuracy |
 
 ## Quick Start
 
@@ -74,7 +134,7 @@ GET /health
 
 ### Evaluate Hand
 
-Evaluates the best 5-card poker hand.
+Evaluates the best 5-card poker hand from 1-7 cards.
 
 ```http
 POST /evaluate
@@ -118,7 +178,7 @@ Content-Type: application/json
 ```
 
 **Parameters:**
-- `hole_cards` (required): Array of 2 cards
+- `hole_cards` (required): Array of exactly 2 cards
 - `board_cards` (required): Array of 0-5 cards
 - `num_opponents` (required): Number of opponents (1-9)
 - `simulations` (optional): Number of simulations (default: 10000)
@@ -141,12 +201,47 @@ Content-Type: application/json
 # Evaluate hand
 curl -X POST http://localhost:8001/evaluate \
   -H "Content-Type: application/json" \
-  -d '{"hole_cards":["AS","KH"],"board_cards":["QS","JS","TS"]}'
+  -d '{"hole_cards":["AS","KS"],"board_cards":["QS","JS","TS"]}'
 
-# Calculate odds
+# Calculate odds (default settings)
 curl -X POST http://localhost:8001/odds \
   -H "Content-Type: application/json" \
   -d '{"hole_cards":["AS","AH"],"board_cards":[],"num_opponents":1}'
+
+# Calculate odds (high accuracy)
+curl -X POST http://localhost:8001/odds \
+  -H "Content-Type: application/json" \
+  -d '{
+    "hole_cards":["AS","AH"],
+    "board_cards":[],
+    "num_opponents":1,
+    "simulations":100000,
+    "workers":8
+  }'
+```
+
+### Python (FastAPI Integration)
+
+```python
+import httpx
+
+GO_SERVICE_URL = "http://localhost:8001"
+
+async def calculate_odds(hole_cards, board_cards, num_opponents):
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{GO_SERVICE_URL}/odds",
+            json={
+                "hole_cards": hole_cards,
+                "board_cards": board_cards,
+                "num_opponents": num_opponents,
+            }
+        )
+        return response.json()
+
+# Usage
+result = await calculate_odds(["AS", "AH"], [], 1)
+print(f"Win probability: {result['win']:.1%}")
 ```
 
 ### JavaScript
@@ -186,7 +281,7 @@ poker-odds-engine/
 
 ## Card Format
 
-Cards are 2-character strings: `[Rank][Suit]`
+Cards are represented as 2-character strings: `[Rank][Suit]`
 
 **Ranks:** `2-9`, `T` (Ten), `J` (Jack), `Q` (Queen), `K` (King), `A` (Ace)  
 **Suits:** `S` (Spades), `H` (Hearts), `D` (Diamonds), `C` (Clubs)
@@ -211,39 +306,37 @@ make fmt
 
 # Build binary
 make build
-
-# Run tests (when added)
-make test
 ```
 
 ## Performance Tuning
 
-### Simulation Count
+### Simulation Count Recommendations
 
-- **1,000 sims**: Fast (~10ms), less accurate
-- **10,000 sims**: Balanced (default, ~100ms)
-- **100,000 sims**: Slow (~1s), very accurate
+| Simulations | Time (1 opp) | Accuracy | Use Case |
+|-------------|--------------|----------|----------|
+| 1,000 | 25ms | ±3% | Quick estimates, UI responsiveness |
+| 10,000 | 172ms | ±1% | **Default** - Good balance |
+| 50,000 | 817ms | ±0.5% | High accuracy analysis |
+| 100,000 | 1.63s | ±0.3% | Maximum precision |
 
-### Worker Count
+### Worker Count Recommendations
 
-Optimal: Number of CPU cores (typically 4-8). More workers = faster parallel processing.
+| Workers | Best For | Notes |
+|---------|----------|-------|
+| 1 | Testing | Sequential, slowest |
+| 2 | Low-end CPUs | Good efficiency (88%) |
+| 4 | **Most systems** | Optimal balance (66% efficiency) |
+| 8 | High-end CPUs | Diminishing returns (39% efficiency) |
 
-## Integration with FastAPI
+**Rule of thumb**: Use number of CPU cores, max 8 workers
 
-This service is designed as a microservice to complement a FastAPI backend:
+### Optimization Tips
 
-```python
-# In your FastAPI routes
-import httpx
+1. **For UI/Real-time**: Use 1,000-10,000 simulations
+2. **For Analysis**: Use 50,000-100,000 simulations
+3. **For Full Table (9 players)**: Expect ~5x slower than heads-up
+4. **Workers**: 4 workers optimal for most cases
 
-GO_SERVICE = "http://localhost:8001"
+## License
 
-@router.post("/odds")
-async def calculate_odds(request: OddsRequest):
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{GO_SERVICE}/odds",
-            json=request.dict()
-        )
-        return response.json()
-```
+MIT
