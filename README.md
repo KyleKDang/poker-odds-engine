@@ -13,7 +13,7 @@ A high-performance poker odds calculator built with **Go** and **Gin framework**
 Benchmarked on MacBook Air M-series (8 cores), all times averaged over 5 trials:
 
 ### Summary
-- **10-50x faster** than Python implementations
+- **3-4x faster** than Python FastAPI implementation
 - **Hand Evaluation**: <1ms per hand
 - **Default (10k sims)**: ~172ms average
 - **High accuracy (100k sims)**: ~1.63s average
@@ -75,6 +75,16 @@ Benchmarked on MacBook Air M-series (8 cores), all times averaged over 5 trials:
 |-------------|----------|----------|
 | 50,000 | 3.47s | High accuracy, full table |
 | 100,000 | 6.79s | Maximum accuracy |
+
+## Performance vs Python
+
+Direct comparison with Python FastAPI implementation (both running 10,000 simulations):
+
+| Scenario | Python (FastAPI) | Go (Gin) | Speedup |
+|----------|------------------|----------|---------|
+| 1 opponent | 764ms | 172ms | **4.4x faster** ⚡ |
+| 3 opponents | 1,206ms | 333ms | **3.6x faster** ⚡ |
+| 9 opponents | 2,700ms | 806ms | **3.3x faster** ⚡ |
 
 ## Quick Start
 
